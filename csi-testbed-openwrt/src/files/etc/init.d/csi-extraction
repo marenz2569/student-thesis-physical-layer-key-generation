@@ -1,0 +1,22 @@
+#!/bin/sh /etc/rc.common
+# Script that sets up the wifi card into promiscuous and sets it to the right frequencies
+
+START=99
+STOP=9
+
+boot() {
+	echo "Setting up wifi card for CSI measurements"
+
+	ifconfig wlan0 down
+	macchanger -m 00:80:41:dd:11:4f wlan0
+	ifconfig wlan0 up
+	iw phy phy0 interface add mon0 type monitor
+	iw dev wlan0 del
+	ifconfig mon0 up
+	# Set frequency to Channel 6
+	iw dev mon0 set freq 2437
+}
+
+start() {}
+
+stop() {}

@@ -1,0 +1,46 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive 
+
+RUN apt-get update
+RUN apt-get install -y build-essential ccache ecj fastjar file g++ gawk \
+gettext git java-propose-classpath libelf-dev libncurses5-dev \
+libncursesw5-dev libssl-dev python2.7-dev python3 unzip wget \
+python3-distutils-extra python3-setuptools python3-dev rsync subversion \
+swig time xsltproc zlib1g-dev
+
+WORKDIR /root
+
+RUN git clone https://git.openwrt.org/openwrt/openwrt.git
+
+WORKDIR /root/openwrt
+
+RUN git checkout openwrt-21.02
+RUN ./scripts/feeds update -a
+RUN ./scripts/feeds install -a
+
+COPY .config-unpatched .config
+
+RUN FORCE_UNSAFE_CONFIGURE=1 make download -j V=s
+RUN FORCE_UNSAFE_CONFIGURE=1 make toolchain/compile -j$(nproc) V=s
+RUN FORCE_UNSAFE_CONFIGURE=1 make world -j$(nproc) V=s
+
+# apply our custom patches
+COPY patches patches
+RUN git apply patches/csi-extraction.patch
+
+COPY files/ /root/openwrt/files/
+
+# fix permission on authorized_keys file
+RUN chmod 600 /root/openwrt/files/etc/dropbear/authorized_keys
+
+COPY .config.tlwr1043ndv2 .config
+
+RUN ./scripts/feeds update package/lorcon
+RUN ./scripts/feeds update package/csi-read
+RUN ./scripts/feeds update package/csid
+
+RUN FORCE_UNSAFE_CONFIGURE=1 make prereq -j$(nproc) V=s
+RUN FORCE_UNSAFE_CONFIGURE=1 make download -j$(nproc) V=s
+RUN FORCE_UNSAFE_CONFIGURE=1 make check -j$(nproc) V=s
+RUN FORCE_UNSAFE_CONFIGURE=1 make -j$(nproc) V=s

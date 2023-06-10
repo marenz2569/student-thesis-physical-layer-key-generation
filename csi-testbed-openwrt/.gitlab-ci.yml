@@ -1,0 +1,46 @@
+include:
+  - local: 'build.yml'
+
+build-tlwr1043ndv2:
+  extends: .build
+  variables:
+    DOCKERFILE: 'Dockerfile.tlwr1043ndv2'
+  after_script:
+    - |
+      cd src && ID=$(docker build -f "$DOCKERFILE" . | tail -n 1 | awk '{print $3;}') && cd ..
+      CID=$(docker create ${ID})
+      docker cp ${CID}:/root/openwrt/bin/targets/ath79/generic/openwrt-ath79-generic-tplink_tl-wr1043nd-v2-initramfs-kernel.bin .
+      docker cp ${CID}:/root/openwrt/bin/targets/ath79/generic/openwrt-ath79-generic-tplink_tl-wr1043nd-v2-squashfs-factory.bin .
+      docker cp ${CID}:/root/openwrt/bin/targets/ath79/generic/openwrt-ath79-generic-tplink_tl-wr1043nd-v2-squashfs-sysupgrade.bin .
+      docker rm ${CID}
+  artifacts:
+    paths:
+      - openwrt-ath79-generic-tplink_tl-wr1043nd-v2-initramfs-kernel.bin
+      - openwrt-ath79-generic-tplink_tl-wr1043nd-v2-squashfs-factory.bin
+      - openwrt-ath79-generic-tplink_tl-wr1043nd-v2-squashfs-sysupgrade.bin
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+
+build-ar300m16:
+  extends: .build
+  variables:
+    DOCKERFILE: 'Dockerfile.ar300m16'
+  after_script:
+    - |
+      cd src && ID=$(docker build -f "$DOCKERFILE" . | tail -n 1 | awk '{print $3;}') && cd ..
+      CID=$(docker create ${ID})
+      docker cp ${CID}:/root/openwrt/bin/targets/ath79/generic/openwrt-ath79-generic-glinet_gl-ar300m16-initramfs-kernel.bin .
+      docker cp ${CID}:/root/openwrt/bin/targets/ath79/generic/openwrt-ath79-generic-glinet_gl-ar300m16-squashfs-sysupgrade.bin .
+      docker rm ${CID}
+  artifacts:
+    paths:
+      - openwrt-ath79-generic-glinet_gl-ar300m16-initramfs-kernel.bin
+      - openwrt-ath79-generic-glinet_gl-ar300m16-squashfs-sysupgrade.bin
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure

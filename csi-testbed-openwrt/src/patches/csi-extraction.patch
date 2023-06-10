@@ -1,0 +1,1363 @@
+diff --git a/package/kernel/mac80211/ath.mk b/package/kernel/mac80211/ath.mk
+index e815f37e1c..de64bdc6a7 100644
+--- a/package/kernel/mac80211/ath.mk
++++ b/package/kernel/mac80211/ath.mk
+@@ -194,7 +194,8 @@ define KernelPackage/ath9k-common
+   DEPENDS+= @PCI_SUPPORT||USB_SUPPORT||TARGET_ath79 +kmod-ath +@DRIVER_11N_SUPPORT
+   FILES:= \
+ 	$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath9k/ath9k_common.ko \
+-	$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath9k/ath9k_hw.ko
++	$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath9k/ath9k_hw.ko \
++	$(PKG_BUILD_DIR)/drivers/net/wireless/ath/ath9k/ar9003_csi.ko
+ endef
+ 
+ define KernelPackage/ath9k
+diff --git a/package/kernel/mac80211/patches/ath/600-ath9k-disable-ampdu-aggregation.patch b/package/kernel/mac80211/patches/ath/600-ath9k-disable-ampdu-aggregation.patch
+new file mode 100644
+index 0000000000..1f5b61e03a
+--- /dev/null
++++ b/package/kernel/mac80211/patches/ath/600-ath9k-disable-ampdu-aggregation.patch
+@@ -0,0 +1,13 @@
++diff --git a/drivers/net/wireless/ath/ath9k/init.c b/drivers/net/wireless/ath/ath9k/init.c
++index 3162fc2..5d2d043 100644
++--- a/drivers/net/wireless/ath/ath9k/init.c
+++++ b/drivers/net/wireless/ath/ath9k/init.c
++@@ -949,7 +949,7 @@ static void ath9k_set_hw_capab(struct ath_softc *sc, struct ieee80211_hw *hw)
++ 		ieee80211_hw_set(hw, SUPPORTS_PS);
++ 
++ 	if (sc->sc_ah->caps.hw_caps & ATH9K_HW_CAP_HT) {
++-		ieee80211_hw_set(hw, AMPDU_AGGREGATION);
+++		// ieee80211_hw_set(hw, AMPDU_AGGREGATION);
++ 
++ 		if (AR_SREV_9280_20_OR_LATER(ah))
++ 			hw->radiotap_mcs_details |=
+diff --git a/package/kernel/mac80211/patches/ath/601-ath9k-enable-csi.patch b/package/kernel/mac80211/patches/ath/601-ath9k-enable-csi.patch
+new file mode 100644
+index 0000000000..291bedef54
+--- /dev/null
++++ b/package/kernel/mac80211/patches/ath/601-ath9k-enable-csi.patch
+@@ -0,0 +1,25 @@
++diff --git a/drivers/net/wireless/ath/ath9k/hw.c b/drivers/net/wireless/ath/ath9k/hw.c
++index fe28d42..af0e718 100644
++--- a/drivers/net/wireless/ath/ath9k/hw.c
+++++ b/drivers/net/wireless/ath/ath9k/hw.c
++@@ -1935,6 +1935,8 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
++ 	bool start_mci_reset = false;
++ 	bool save_fullsleep = ah->chip_fullsleep;
++ 
+++	u32 tmp;
+++
++ 	if (ath9k_hw_mci_is_enabled(ah)) {
++ 		start_mci_reset = ar9003_mci_start_reset(ah, chan);
++ 		if (start_mci_reset)
++@@ -2143,6 +2145,11 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
++ 	if (AR_SREV_9330(ah) || AR_SREV_9340(ah))
++ 		ath9k_hw_disable_pll_lock_detect(ah);
++ 
+++	/* Enable reading out CSI from the hardware */
+++	tmp = REG_READ(ah, 0x8344);
+++	tmp |= (1 << 28);
+++	REG_WRITE(ah, 0x8344, tmp);
+++
++ 	return 0;
++ }
++ EXPORT_SYMBOL(ath9k_hw_reset);
+diff --git a/package/kernel/mac80211/patches/ath/602-ath9k-make-802.11n-packets-sounding.patch b/package/kernel/mac80211/patches/ath/602-ath9k-make-802.11n-packets-sounding.patch
+new file mode 100644
+index 0000000000..6927b84ada
+--- /dev/null
++++ b/package/kernel/mac80211/patches/ath/602-ath9k-make-802.11n-packets-sounding.patch
+@@ -0,0 +1,52 @@
++diff --git a/drivers/net/wireless/ath/ath9k/ar9003_mac.c b/drivers/net/wireless/ath/ath9k/ar9003_mac.c
++index 76b5389..073aa7b 100644
++--- a/drivers/net/wireless/ath/ath9k/ar9003_mac.c
+++++ b/drivers/net/wireless/ath/ath9k/ar9003_mac.c
++@@ -30,6 +30,7 @@ ar9003_set_txdesc(struct ath_hw *ah, void *ds, struct ath_tx_info *i)
++ 	int checksum = 0;
++ 	u32 val, ctl12, ctl17;
++ 	u8 desc_len;
+++	u32 rate_ctl, tries_ctl;
++ 
++ 	desc_len = ((AR_SREV_9462(ah) || AR_SREV_9565(ah)) ? 0x18 : 0x17);
++ 
++@@ -150,11 +151,38 @@ ar9003_set_txdesc(struct ath_hw *ah, void *ds, struct ath_tx_info *i)
++ 		| set11nRateFlags(i->rates, 3)
++ 		| SM(i->rtscts_rate, AR_RTSCTSRate));
++ 
++-	WRITE_ONCE(ads->ctl19, AR_Not_Sounding);
+++	// WRITE_ONCE(ads->ctl19, AR_Not_Sounding);
++ 
+++	/* Set TPC for each Tx series to value passed in in ath_tx_info */
++ 	WRITE_ONCE(ads->ctl20, SM(i->txpower[1], AR_XmitPower1));
++ 	WRITE_ONCE(ads->ctl21, SM(i->txpower[2], AR_XmitPower2));
++ 	WRITE_ONCE(ads->ctl22, SM(i->txpower[3], AR_XmitPower3));
+++
+++	/* Get Tx rates */
+++	rate_ctl = READ_ONCE(ads->ctl14);
+++	/* If Tx rates greater than MCS0 then set the antenna switch for Tx0 to 0
+++	 * and set tx_tries to 0, such that frame data exchanges are not retried */
+++	if (MS(rate_ctl, AR_XmitRate3) >= 0x80 ||
+++			MS(rate_ctl, AR_XmitRate2) >= 0x80 ||
+++			MS(rate_ctl, AR_XmitRate1) >= 0x80) {
+++		/* Set antenna switches for Tx series 0
+++		 * Original CSI code also set switches for 1-3 but this is inheritently
+++		 * done in lines 156-158 */
+++		WRITE_ONCE(ads->ctl19, 0);
+++		/* Set tx_tries to zero for each Tx series */
+++		tries_ctl = READ_ONCE(ads->ctl13);
+++		tries_ctl &=
+++			~(AR_XmitDataTries1 | AR_XmitDataTries2 |
+++					AR_XmitDataTries3);
+++		WRITE_ONCE(ads->ctl13, tries_ctl);
+++	} else
+++		WRITE_ONCE(ads->ctl19, AR_Not_Sounding);
+++
+++	/* Todo Why? */
+++	if (MS(rate_ctl, AR_XmitRate0) >= 0x80)
+++		WRITE_ONCE(ads->ctl19, 0);
+++	else
+++		WRITE_ONCE(ads->ctl19, AR_Not_Sounding);
++ }
++ 
++ static u16 ar9003_calc_ptr_chksum(struct ar9003_txc *ads)
+diff --git a/package/kernel/mac80211/patches/ath/604-ath9k-add-kernlog-info-for-received-frames.patch b/package/kernel/mac80211/patches/ath/604-ath9k-add-kernlog-info-for-received-frames.patch
+new file mode 100644
+index 0000000000..629b3fd836
+--- /dev/null
++++ b/package/kernel/mac80211/patches/ath/604-ath9k-add-kernlog-info-for-received-frames.patch
+@@ -0,0 +1,70 @@
++diff --git a/drivers/net/wireless/ath/ath9k/ar9003_csi.h b/drivers/net/wireless/ath/ath9k/ar9003_csi.h
++new file mode 100644
++index 0000000..94ab04b
++--- /dev/null
+++++ b/drivers/net/wireless/ath/ath9k/ar9003_csi.h
++@@ -0,0 +1,35 @@
+++/*
+++ * =====================================================================================
+++ *
+++ *       Filename:  ar003_csi.h
+++ *
+++ *    Description:  ar003_csi data structure definiation
+++ *
+++ *        Version:  1.0
+++ *        Created:  14/12/2013 20:04:10
+++ *       Revision:  none
+++ *       Compiler:  gcc
+++ *
+++ *         Author:  Yaxiong Xie xieyaxiongfly@gmail.com 
+++ *   Organization:  
+++ *
+++ * =====================================================================================
+++ */
+++
+++#include "hw.h"
+++#include "mac.h"
+++#include "ar9003_mac.h"
+++
+++#define AR_rx_ness                  0x00000060
+++#define AR_rx_ness_S                5
+++#define AR_ness                     0xc0000000 
+++#define AR_ness_S                   30
+++
+++#define AR_hw_upload_data           0x00400000
+++#define AR_hw_upload_data_S         22
+++#define AR_rx_not_sounding          0x00000010
+++#define AR_not_sounding             0x20000000
+++#define AR_hw_upload_data_valid     0x00000080
+++#define AR_hw_upload_data_valid_S   7  
+++#define AR_hw_upload_data_type      0x06000000
+++#define AR_hw_upload_data_type_S    25
++diff --git a/drivers/net/wireless/ath/ath9k/ar9003_mac.c b/drivers/net/wireless/ath/ath9k/ar9003_mac.c
++index 073aa7b..5d5fe66 100644
++--- a/drivers/net/wireless/ath/ath9k/ar9003_mac.c
+++++ b/drivers/net/wireless/ath/ath9k/ar9003_mac.c
++@@ -17,6 +17,7 @@
++ #include "hw.h"
++ #include "ar9003_mac.h"
++ #include "ar9003_mci.h"
+++#include "ar9003_csi.h"
++ 
++ static void ar9003_hw_rx_enable(struct ath_hw *hw)
++ {
++@@ -610,6 +611,16 @@ int ath9k_hw_process_rxdesc_edma(struct ath_hw *ah, struct ath_rx_status *rxs,
++ 	if (rxsp->status11 & AR_KeyMiss)
++ 		rxs->rs_status |= ATH9K_RXERR_KEYMISS;
++ 
+++	u8 rx_not_sounding = (rxsp->status4 & AR_rx_not_sounding) ? 1 : 0;
+++	if (!rx_not_sounding) {
+++		u8 rx_hw_upload_data = (rxsp->status2 & AR_hw_upload_data) ? 1 : 0;
+++		u8 rx_hw_upload_data_valid = (rxsp->status4 & AR_hw_upload_data_valid) ? 1 : 0;
+++		u8 rx_hw_upload_data_type = MS(rxsp->status11, AR_hw_upload_data_type);
+++		printk(KERN_CRIT "Sounding Packet: HT %d MCS %d ant %d bw %d status %d more %d datalen %d upload %d valid %d type %d\n", (rxs->rs_rate & 0x80) ? 1 : 0, rxs->rs_rate & 0x7f,
+++				rxs->rs_antenna, rxs->bw, rxs->rs_status, rxs->rs_more, rxs->rs_datalen,
+++				rx_hw_upload_data, rx_hw_upload_data_valid, rx_hw_upload_data_type);
+++	}
+++
++ 	return 0;
++ }
++ EXPORT_SYMBOL(ath9k_hw_process_rxdesc_edma);
+diff --git a/package/kernel/mac80211/patches/ath/605-ath9k-set-magic-flags.patch b/package/kernel/mac80211/patches/ath/605-ath9k-set-magic-flags.patch
+new file mode 100644
+index 0000000000..412cdc504d
+--- /dev/null
++++ b/package/kernel/mac80211/patches/ath/605-ath9k-set-magic-flags.patch
+@@ -0,0 +1,39 @@
++diff --git a/drivers/net/wireless/ath/ath9k/ar9003_csi.h b/drivers/net/wireless/ath/ath9k/ar9003_csi.h
++index 94ab04b..81af39f 100644
++--- a/drivers/net/wireless/ath/ath9k/ar9003_csi.h
+++++ b/drivers/net/wireless/ath/ath9k/ar9003_csi.h
++@@ -33,3 +33,8 @@
++ #define AR_hw_upload_data_valid_S   7  
++ #define AR_hw_upload_data_type      0x06000000
++ #define AR_hw_upload_data_type_S    25
+++
+++ 
+++#define AR_H_XFER_TIMEOUT               0x831c
+++#define AR_EXBF_IMMDIATE_RESP           0x00000040
+++#define AR_EXBF_NOACK_NO_RPT            0x00000100
++diff --git a/drivers/net/wireless/ath/ath9k/hw.c b/drivers/net/wireless/ath/ath9k/hw.c
++index af0e718..ce774c9 100644
++--- a/drivers/net/wireless/ath/ath9k/hw.c
+++++ b/drivers/net/wireless/ath/ath9k/hw.c
++@@ -28,6 +28,7 @@
++ #include "ar9003_mac.h"
++ #include "ar9003_mci.h"
++ #include "ar9003_phy.h"
+++#include "ar9003_csi.h"
++ #include "ath9k.h"
++ 
++ static bool ath9k_hw_set_reset_reg(struct ath_hw *ah, u32 type);
++@@ -2150,6 +2151,13 @@ int ath9k_hw_reset(struct ath_hw *ah, struct ath9k_channel *chan,
++ 	tmp |= (1 << 28);
++ 	REG_WRITE(ah, 0x8344, tmp);
++ 
+++	tmp = REG_READ(ah, AR_H_XFER_TIMEOUT);
+++	tmp &= ~(AR_EXBF_IMMDIATE_RESP);
+++	tmp |= 0x00000080;
+++	// might not need this one
+++	tmp &= ~(AR_EXBF_NOACK_NO_RPT);
+++	REG_WRITE(ah, AR_H_XFER_TIMEOUT, tmp);
+++
++ 	return 0;
++ }
++ EXPORT_SYMBOL(ath9k_hw_reset);
+diff --git a/package/kernel/mac80211/patches/ath/606-csi-extraction-kmod.patch b/package/kernel/mac80211/patches/ath/606-csi-extraction-kmod.patch
+new file mode 100644
+index 0000000000..6eed2d6a01
+--- /dev/null
++++ b/package/kernel/mac80211/patches/ath/606-csi-extraction-kmod.patch
+@@ -0,0 +1,285 @@
++diff --git a/drivers/net/wireless/ath/ath9k/Makefile b/drivers/net/wireless/ath/ath9k/Makefile
++index 6427bc6..ead01c6 100644
++--- a/drivers/net/wireless/ath/ath9k/Makefile
+++++ b/drivers/net/wireless/ath/ath9k/Makefile
++@@ -79,4 +79,6 @@ ath9k_htc-$(CPTCFG_ATH9K_HTC_DEBUGFS) += htc_drv_debug.o
++ 
++ obj-$(CPTCFG_ATH9K_HTC) += ath9k_htc.o
++ 
+++obj-m += ar9003_csi.o
+++
++ obj-$(CPTCFG_ATH9K_PCI_NO_EEPROM) += ath9k_pci_owl_loader.o
++diff --git a/drivers/net/wireless/ath/ath9k/ar9003_csi.c b/drivers/net/wireless/ath/ath9k/ar9003_csi.c
++new file mode 100644
++index 0000000..c5ea3fa
++--- /dev/null
+++++ b/drivers/net/wireless/ath/ath9k/ar9003_csi.c
++@@ -0,0 +1,204 @@
+++#include "ar9003_csi.h"
+++#include "ar9003_phy.h"
+++
+++#include <asm-generic/bitops/const_hweight.h>
+++#include <linux/cdev.h>
+++#include <linux/delay.h>
+++#include <linux/device.h>
+++#include <linux/fs.h>
+++#include <linux/init.h>
+++#include <linux/irq.h>
+++#include <linux/kernel.h>
+++#include <linux/module.h>
+++#include <linux/poll.h>
+++#include <linux/wait.h>
+++
+++static int csi_open(struct inode *, struct file *);
+++static int csi_release(struct inode *, struct file *);
+++static ssize_t csi_read(struct file *, char __user *, size_t, loff_t *);
+++static ssize_t csi_write(struct file *, const char __user *, size_t, loff_t *);
+++
+++#define BITS_PER_BYTE 8
+++#define BITS_PER_SYMBOL 10
+++#define BITS_PER_COMPLEX_SYMBOL  (2 * BITS_PER_SYMBOL)
+++
+++#define DEVICE_NAME "csi"
+++#define BUF_SIZE 128
+++
+++DECLARE_WAIT_QUEUE_HEAD (csi_queue);
+++
+++volatile u32 csi_head;
+++volatile u32 csi_tail;
+++static struct csi_t csi_buffer[BUF_SIZE];
+++
+++static int major;
+++ 
+++enum {
+++	CDEV_NOT_USED = 0,
+++	CDEV_EXCLUSIVE_OPEN = 1, 
+++}; 
+++ 
+++// This flag will also toggle if we record data or discard it
+++static atomic_t already_open = ATOMIC_INIT(CDEV_NOT_USED); 
+++
+++static struct class *cls;
+++
+++static struct file_operations csi_fops = {
+++	.read = csi_read,
+++	.write = csi_write,
+++	.open = csi_open,
+++	.release = csi_release,
+++};
+++
+++static int __init csi_init(void)
+++{
+++	major = register_chrdev(0, DEVICE_NAME, &csi_fops);
+++
+++	if (major < 0) {
+++		pr_alert("Registering csi device failed with %d\n", major);
+++		return major;
+++	}
+++
+++	cls = class_create(THIS_MODULE, DEVICE_NAME);
+++	device_create(cls, NULL, MKDEV(major, 0), NULL, DEVICE_NAME);
+++
+++	pr_info("Device created on /dev/%s\n", DEVICE_NAME);
+++
+++	csi_head = 0;
+++	csi_tail = 0;
+++
+++	return 0;
+++}
+++
+++static void __exit csi_exit(void)
+++{
+++	device_destroy(cls, MKDEV(major, 0));
+++	class_destroy(cls);
+++
+++	unregister_chrdev(major, DEVICE_NAME);
+++}
+++
+++static int csi_open(struct inode *inode, struct file *file)
+++{
+++	if (atomic_cmpxchg(&already_open, CDEV_NOT_USED, CDEV_EXCLUSIVE_OPEN))
+++		return -EBUSY;
+++
+++	try_module_get(THIS_MODULE);
+++
+++	return 0;
+++}
+++
+++static int csi_release(struct inode *inode, struct file *file)
+++{
+++	atomic_set(&already_open, CDEV_NOT_USED);
+++
+++	module_put(THIS_MODULE);
+++
+++	return 0;
+++}
+++
+++static ssize_t csi_read(struct file *filep, char __user *buffer, size_t length, loff_t *offset)
+++{
+++	*offset = 0;
+++
+++	// if there is no data, wait until a timeout
+++	if (csi_head == csi_tail) {
+++		// HZ should be at least 100
+++		// https://man7.org/linux/man-pages/man7/time.7.html
+++		// 10 ms timeout
+++		wait_event_interruptible_timeout(csi_queue, csi_head != csi_tail, HZ / 100);
+++	}
+++
+++	if (csi_head != csi_tail) {
+++		struct csi_t *csi = csi_buffer + csi_tail;
+++
+++		// printk(KERN_CRIT "Payload length: %d, CSI length: %d\n", csi->data_length, csi->csi_length);
+++		// printk(KERN_CRIT "Timestamp: %d, NR: %d, NC: %d, num_tones: %d, rssi: %d, noise: %d, rate: %d\n",
+++		// 		csi->timestamp, csi->nr, csi->nc, csi->num_tones, csi->rssi, csi->noise, csi->rate);
+++
+++		copy_to_user(buffer, csi, sizeof(struct csi_t));
+++
+++		csi_tail = (csi_tail + 1) & (BUF_SIZE - 1);
+++
+++		return sizeof(struct csi_t);
+++	} else {
+++		return 0;
+++	}
+++}
+++
+++static ssize_t csi_write(struct file *filep, const char __user *buffer, size_t length, loff_t *offset)
+++{
+++	pr_alert("Writing to csi driver is not supported.\n");
+++	return -EINVAL;
+++}
+++
+++void csi_record(struct ath_hw *ah, struct ath_rx_status *rxs, void *buf_addr)
+++{
+++	struct ar9003_rxs *rxsp = buf_addr;
+++
+++	static struct csi_t csi;
+++
+++	u8 rx_not_sounding = (rxsp->status4 & AR_rx_not_sounding) ? 1 : 0;
+++	u8 rx_hw_upload_data = (rxsp->status2 & AR_hw_upload_data) ? 1 : 0;
+++	u8 rx_hw_upload_data_valid = (rxsp->status4 & AR_hw_upload_data_valid) ? 1 : 0;
+++	u8 rx_hw_upload_data_type = MS(rxsp->status11, AR_hw_upload_data_type);
+++
+++	// do not process not sounding
+++	if (rx_not_sounding)
+++		return;
+++
+++	// receive data
+++	if (rx_hw_upload_data_type == 0 && rx_hw_upload_data == 0) {
+++		if (rxs->rs_datalen > sizeof(csi.data)) {
+++			printk(KERN_CRIT "csi: received more data than space allocated\n");
+++			return;
+++		}
+++		csi.data_length = rxs->rs_datalen;
+++		csi.csi_length = 0;
+++		memcpy(csi.data, buf_addr + sizeof(struct ar9003_rxs), rxs->rs_datalen);
+++
+++		return;
+++	}
+++
+++	// upload csi
+++	if (rx_hw_upload_data == 1) {
+++		if (csi.csi_length + rxs->rs_datalen > sizeof(csi.csi)) {
+++			printk(KERN_CRIT "csi_offset is above max. Did you forget resetting it to 0? Are you using more than 3x3 antennas?");
+++			return;
+++		}
+++
+++		memcpy(csi.csi + csi.csi_length, buf_addr + sizeof(struct ar9003_rxs), rxs->rs_datalen);
+++		csi.csi_length += rxs->rs_datalen;
+++	}
+++
+++	// is this the last csi upload and is it valid?
+++	// the last frame contains all the interesting fields
+++	if (rx_hw_upload_data == 1 && rx_hw_upload_data_valid == 1 && rx_hw_upload_data_type == 1) {
+++		csi.timestamp = rxs->rs_tstamp;
+++		csi.nr = hweight8(ah->rxchainmask);
+++		csi.num_tones = ((rxsp->status4 & AR_2040) >> 1) ? 114 : 56;
+++		csi.nc = (u8) ((int) (csi.csi_length * BITS_PER_BYTE) / (int) (BITS_PER_COMPLEX_SYMBOL * (int) csi.nr * (int) csi.num_tones));
+++		csi.rssi = rxs->rs_rssi;
+++		csi.noise = rxsp->status10 >> 22;
+++		csi.rate = rxs->rs_rate;
+++
+++		// printk(KERN_CRIT "Payload length: %d, CSI length: %d\n", csi.data_length, csi.csi_length);
+++		// printk(KERN_CRIT "Timestamp: %d, NR: %d, NC: %d, num_tones: %d, rssi: %d, noise: %d, rate: %d\n",
+++		// 		csi.timestamp, csi.nr, csi.nc, csi.num_tones, csi.rssi, csi.noise, csi.rate);
+++
+++		// device is open, write data to buffer
+++		if (atomic_read(&already_open) == CDEV_EXCLUSIVE_OPEN) {
+++			memcpy((void *) (csi_buffer + csi_head), &csi, sizeof(struct csi_t));
+++			csi_head = (csi_head + 1) & (BUF_SIZE - 1);
+++			wake_up_interruptible(&csi_queue);
+++		}
+++	}
+++}
+++EXPORT_SYMBOL(csi_record);
+++
+++module_init(csi_init);
+++module_exit(csi_exit);
+++
+++MODULE_AUTHOR("Markus Schmidl");
+++MODULE_LICENSE("Dual BSD/GPL");
+++MODULE_DESCRIPTION("CSI extraction of Atheros ath9k chipset by exploiting TxBF procedure");
++diff --git a/drivers/net/wireless/ath/ath9k/ar9003_csi.h b/drivers/net/wireless/ath/ath9k/ar9003_csi.h
++index 81af39f..4f86038 100644
++--- a/drivers/net/wireless/ath/ath9k/ar9003_csi.h
+++++ b/drivers/net/wireless/ath/ath9k/ar9003_csi.h
++@@ -16,9 +16,8 @@
++  * =====================================================================================
++  */
++ 
++-#include "hw.h"
++-#include "mac.h"
++-#include "ar9003_mac.h"
+++#ifndef AR9003_CSI_H
+++#define AR9003_CSI_H
++ 
++ #define AR_rx_ness                  0x00000060
++ #define AR_rx_ness_S                5
++@@ -38,3 +37,26 @@
++ #define AR_H_XFER_TIMEOUT               0x831c
++ #define AR_EXBF_IMMDIATE_RESP           0x00000040
++ #define AR_EXBF_NOACK_NO_RPT            0x00000100
+++
+++#include "hw.h"
+++#include "mac.h"
+++#include "ar9003_mac.h"
+++
+++struct csi_t {
+++	u8 data[4096];
+++	size_t data_length;
+++	// 114 Channels (40MHz) * 3 RX * 3 TX * 2 (real and imag) * 10/8. (precision) = 2565B
+++	u8 csi[2565];
+++	size_t csi_length;
+++	u32 timestamp;
+++	u8 nr;
+++	u8 nc;
+++	u8 num_tones;
+++	int8_t rssi;
+++	u16 noise;
+++	u8 rate;
+++};
+++
+++void csi_record(struct ath_hw *ah, struct ath_rx_status *rxs, void *buf_addr);
+++
+++#endif
++diff --git a/drivers/net/wireless/ath/ath9k/ar9003_mac.c b/drivers/net/wireless/ath/ath9k/ar9003_mac.c
++index 5d5fe66..99b037a 100644
++--- a/drivers/net/wireless/ath/ath9k/ar9003_mac.c
+++++ b/drivers/net/wireless/ath/ath9k/ar9003_mac.c
++@@ -611,15 +611,7 @@ int ath9k_hw_process_rxdesc_edma(struct ath_hw *ah, struct ath_rx_status *rxs,
++ 	if (rxsp->status11 & AR_KeyMiss)
++ 		rxs->rs_status |= ATH9K_RXERR_KEYMISS;
++ 
++-	u8 rx_not_sounding = (rxsp->status4 & AR_rx_not_sounding) ? 1 : 0;
++-	if (!rx_not_sounding) {
++-		u8 rx_hw_upload_data = (rxsp->status2 & AR_hw_upload_data) ? 1 : 0;
++-		u8 rx_hw_upload_data_valid = (rxsp->status4 & AR_hw_upload_data_valid) ? 1 : 0;
++-		u8 rx_hw_upload_data_type = MS(rxsp->status11, AR_hw_upload_data_type);
++-		printk(KERN_CRIT "Sounding Packet: HT %d MCS %d ant %d bw %d status %d more %d datalen %d upload %d valid %d type %d\n", (rxs->rs_rate & 0x80) ? 1 : 0, rxs->rs_rate & 0x7f,
++-				rxs->rs_antenna, rxs->bw, rxs->rs_status, rxs->rs_more, rxs->rs_datalen,
++-				rx_hw_upload_data, rx_hw_upload_data_valid, rx_hw_upload_data_type);
++-	}
+++	csi_record(ah, rxs, buf_addr);
++ 
++ 	return 0;
++ }
+diff --git a/package/utils/csi-read/Makefile b/package/utils/csi-read/Makefile
+new file mode 100644
+index 0000000000..314742b5a2
+--- /dev/null
++++ b/package/utils/csi-read/Makefile
+@@ -0,0 +1,38 @@
++include $(TOPDIR)/rules.mk
++
++PKG_NAME:=csi-read
++PKG_VERSION:=1.0
++PKG_RELEASE:=1
++
++PKG_BUILD_DIR := $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
++
++include $(INCLUDE_DIR)/package.mk
++
++define Package/csi-read
++	SECTION:=CSI
++	CATEGORY:=CSI
++	TITLE:=CSI Debug Reader
++endef
++
++define Package/csi-read/description
++	CSI Debug Reader
++endef
++
++define Build/Prepare
++	mkdir -p $(PKG_BUILD_DIR)
++	$(CP) ./src/* $(PKG_BUILD_DIR)/
++endef
++
++define Build/Configure
++endef
++
++define Build/Compile
++	$(MAKE) -C $(PKG_BUILD_DIR) $(TARGET_CONFIGURE_OPTS)
++endef
++
++define Package/csi-read/install
++	$(INSTALL_DIR) $(1)/bin
++	$(INSTALL_BIN) $(PKG_BUILD_DIR)/csi-read $(1)/bin/
++endef
++
++$(eval $(call BuildPackage,csi-read))
+diff --git a/package/utils/csi-read/src/Makefile b/package/utils/csi-read/src/Makefile
+new file mode 100644
+index 0000000000..4cd309ee43
+--- /dev/null
++++ b/package/utils/csi-read/src/Makefile
+@@ -0,0 +1,13 @@
++PROFILE = -O2 -s
++CFLAGS = $(PROFILE)
++
++all: csi-read
++
++main.o: main.c
++	$(CC) $(CFLAGS) -c main.c
++
++csi-read: main.o
++	$(CC) -o csi-read main.o $(LDFLAGS)
++
++clean:
++	rm -f *.o csi-read
+diff --git a/package/utils/csi-read/src/csi.h b/package/utils/csi-read/src/csi.h
+new file mode 100644
+index 0000000000..ce59658cb4
+--- /dev/null
++++ b/package/utils/csi-read/src/csi.h
+@@ -0,0 +1,21 @@
++#ifndef CSI_H
++#define CSI_H
++
++#include <stdint.h>
++
++struct csi_t {
++	uint8_t data[4096];
++	size_t data_length;
++	// 114 Channels (40MHz) * 3 RX * 3 TX * 2 (real and imag) * 10/8. (precision) = 2565B
++	uint8_t csi[2565];
++	size_t csi_length;
++	uint32_t timestamp;
++	uint8_t nr;
++	uint8_t nc;
++	uint8_t num_tones;
++	int8_t rssi;
++	uint16_t noise;
++	uint8_t rate;
++};
++
++#endif
+diff --git a/package/utils/csi-read/src/main.c b/package/utils/csi-read/src/main.c
+new file mode 100644
+index 0000000000..1a4509f8a1
+--- /dev/null
++++ b/package/utils/csi-read/src/main.c
+@@ -0,0 +1,51 @@
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <termios.h>
++#include <pthread.h>
++#include <signal.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++
++#include "csi.h"
++
++static volatile int keepRunning = 1;
++
++void intHandler(int dummy)
++{
++  keepRunning = 0;
++}
++
++
++int main(int argc, char **argv)
++{
++	int fd;
++	struct csi_t csi;
++
++	signal(SIGINT, intHandler);
++
++	fd = open("/dev/csi", O_RDWR);
++
++	if (fd < 0){
++			perror("Failed to open /dev/csi\n");
++			return errno;
++	}
++
++	while (keepRunning) {
++		ssize_t cnt = read(fd, &csi, sizeof(struct csi_t));
++		if (cnt == sizeof(struct csi_t)) {
++			printf("Read %d Bytes from the kernel into your buffer\n", cnt);
++
++			printf("Payload length: %d, CSI length: %d\n", csi.data_length, csi.csi_length);
++			printf("Timestamp: %d, NR: %d, NC: %d, num_tones: %d, rssi: %d, noise: %d, rate: %d\n",
++					csi.timestamp, csi.nr, csi.nc, csi.num_tones, csi.rssi, csi.noise, csi.rate);
++		}
++	}
++
++	close(fd);
++
++	return 0;
++}
+diff --git a/package/utils/csid/Makefile b/package/utils/csid/Makefile
+new file mode 100644
+index 0000000000..f974a0313f
+--- /dev/null
++++ b/package/utils/csid/Makefile
+@@ -0,0 +1,39 @@
++include $(TOPDIR)/rules.mk
++
++PKG_NAME:=csid
++PKG_VERSION:=1.0
++PKG_RELEASE:=1
++
++PKG_BUILD_DIR := $(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
++
++include $(INCLUDE_DIR)/package.mk
++
++define Package/csid
++	SECTION:=CSI
++	CATEGORY:=CSI
++	DEPENDS:=+lorcon +libuuid +libjson-c
++	TITLE:=CSI Daemon
++endef
++
++define Package/csid/description
++	CSI Daemon
++endef
++
++define Build/Prepare
++	mkdir -p $(PKG_BUILD_DIR)
++	$(CP) ./src/* $(PKG_BUILD_DIR)/
++endef
++
++define Build/Configure
++endef
++
++define Build/Compile
++	$(MAKE) -C $(PKG_BUILD_DIR) $(TARGET_CONFIGURE_OPTS)
++endef
++
++define Package/csid/install
++	$(INSTALL_DIR) $(1)/bin
++	$(INSTALL_BIN) $(PKG_BUILD_DIR)/csid $(1)/bin/
++endef
++
++$(eval $(call BuildPackage,csid))
+diff --git a/package/utils/csid/src/Makefile b/package/utils/csid/src/Makefile
+new file mode 100644
+index 0000000000..5007a6279c
+--- /dev/null
++++ b/package/utils/csid/src/Makefile
+@@ -0,0 +1,13 @@
++PROFILE = -O2 -s
++CFLAGS = $(PROFILE)
++
++all: csid
++
++main.o: main.c
++	$(CC) $(CFLAGS) -c main.c
++
++csid: main.o
++	$(CC) -o csid main.o -lorcon2 -ljson-c -luuid $(LDFLAGS)
++
++clean:
++	rm -f *.o csid
+diff --git a/package/utils/csid/src/csi.h b/package/utils/csid/src/csi.h
+new file mode 100644
+index 0000000000..ce59658cb4
+--- /dev/null
++++ b/package/utils/csid/src/csi.h
+@@ -0,0 +1,21 @@
++#ifndef CSI_H
++#define CSI_H
++
++#include <stdint.h>
++
++struct csi_t {
++	uint8_t data[4096];
++	size_t data_length;
++	// 114 Channels (40MHz) * 3 RX * 3 TX * 2 (real and imag) * 10/8. (precision) = 2565B
++	uint8_t csi[2565];
++	size_t csi_length;
++	uint32_t timestamp;
++	uint8_t nr;
++	uint8_t nc;
++	uint8_t num_tones;
++	int8_t rssi;
++	uint16_t noise;
++	uint8_t rate;
++};
++
++#endif
+diff --git a/package/utils/csid/src/main.c b/package/utils/csid/src/main.c
+new file mode 100644
+index 0000000000..2e7d65dd09
+--- /dev/null
++++ b/package/utils/csid/src/main.c
+@@ -0,0 +1,498 @@
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
++#include <unistd.h>
++#include <fcntl.h>
++#include <errno.h>
++#include <termios.h>
++#include <pthread.h>
++#include <signal.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++
++#include <lorcon.h>
++#include <lorcon_forge.h>
++#include <lorcon_packasm.h>
++
++#include <json-c/json.h>
++
++#include <uuid/uuid.h>
++
++#include "csi.h"
++
++static volatile int keepRunning = 1;
++static const char * const version = "1.0.3";
++static pthread_t alice_send_tid = NULL;
++
++enum MODE {
++	ALICE = 0,
++	BOB = 1,
++	EVE = 2,
++};
++
++const char *mode_to_string(const enum MODE mode)
++{
++	switch (mode) {
++	case ALICE:
++		return "alice";
++	case BOB:
++		return "bob";
++	case EVE:
++		return "eve";
++	default:
++		return "unknown";
++	}
++}
++
++void intHandler(int dummy)
++{
++  keepRunning = 0;
++}
++
++void usage(char *argv0)
++{
++	printf("\t-i <interface>        Radio interface\n");
++	printf("\t-c <channel>          Channel (e.g. 6HT20)\n");
++	printf("\t-m <MCS_index>        MCS index ( 0- 7 1 Stream\n"
++	       "\t                                  8-15 2 Streams\n"
++	       "\t                                 16-23 3 Streams\n"
++	       "\t                                 24-31 4 Streams\n");
++	printf("\t-b <band_width>       Band width(0-20MHz | 1-40MHz)\n");
++	printf("\t-g <guard_interval>   Guard interval (0-800ns | 1-400ns)\n");
++	printf("\t-d <delay>            Interframe delay in ms\n");
++	printf("\t-a <MAC Address>      MAC Address of of the receiver\n");
++	printf("\t-t <type>             Type of daemon (alice | bob | eve)\n");
++	printf("\t-n <count>            Number of packets to send (only relevant for alice)\n");
++	printf("\t-l <label>            Label for measurement (only relevant for alice)\n");
++
++	printf("\nExample:\n");
++	printf("\t%s -i mon0 -c 6HT20 -m 16 -b 0 -g 0 -d 100 -a 00:80:41:dd:11:4f -t alice -n 100 -l \"test-measurement\" \n", argv0);
++}
++
++void send_csi_object(enum MODE to, const struct csi_t *csi, const char *from, const char *uuid, const char *label)
++{
++	struct json_object *jobj = json_object_new_object();
++
++	// data
++	{
++		struct json_object *data_obj = json_object_new_array_ext(csi->data_length);
++
++		for (size_t i = 0; i < csi->data_length; i++)
++			json_object_array_add(data_obj, json_object_new_uint64(csi->data[i]));
++
++		json_object_object_add(jobj, "data", data_obj);
++	}
++
++	// csi
++	{
++		struct json_object *num_tones_obj = json_object_new_array_ext(csi->num_tones);
++
++		uint32_t bits_left = 16;
++		uint32_t bitmask = (1 << 10) - 1;
++		size_t idx = 0;
++		uint32_t current_data = csi->csi[idx++] + (csi->csi[idx++] << 8);
++
++		for (size_t i = 0; i < csi->num_tones; i++) {
++			struct json_object *nc_obj = json_object_new_array_ext(csi->nc);
++			for (size_t j = 0; j < csi->nc; j++) {
++				struct json_object *nr_obj = json_object_new_array_ext(csi->nr);
++				for (size_t k = 0; k < csi->nr; k++) {
++					struct json_object *complex_obj = json_object_new_array_ext(2);
++
++					int32_t real, imag;
++
++					{
++						if (bits_left < 10) {
++							current_data += (csi->csi[idx++] + (csi->csi[idx++] << 8)) << bits_left;
++							bits_left += 16;
++						}
++
++						imag = current_data & bitmask;
++						if (imag & (1 << 9))
++							imag -= (1 << 10);
++
++						current_data = current_data >> 10;
++						bits_left -= 10;
++					}
++
++					{
++						if (bits_left < 10) {
++							current_data += (csi->csi[idx++] + (csi->csi[idx++] << 8)) << bits_left;
++							bits_left += 16;
++						}
++
++						real = current_data & bitmask;
++						if (real & (1 << 9))
++							real -= (1 << 10);
++
++						current_data = current_data >> 10;
++						bits_left -= 10;
++					}
++
++					json_object_array_add(complex_obj, json_object_new_int(real));
++					json_object_array_add(complex_obj, json_object_new_int(imag));
++
++					json_object_array_add(nr_obj, complex_obj);
++				}
++				json_object_array_add(nc_obj, nr_obj);
++			}
++			json_object_array_add(num_tones_obj, nc_obj);
++		}
++
++		json_object_object_add(jobj, "csi", num_tones_obj);
++	}
++
++	json_object_object_add(jobj, "timestamp", json_object_new_uint64(csi->timestamp));
++	json_object_object_add(jobj, "nr", json_object_new_uint64(csi->nr));
++	json_object_object_add(jobj, "nc", json_object_new_uint64(csi->nc));
++	json_object_object_add(jobj, "num_tones", json_object_new_uint64(csi->num_tones));
++	json_object_object_add(jobj, "rssi", json_object_new_int(csi->rssi));
++	json_object_object_add(jobj, "noise", json_object_new_uint64(csi->noise));
++	json_object_object_add(jobj, "rate", json_object_new_uint64(csi->rate));
++	json_object_object_add(jobj, "version", json_object_new_string(version));
++	json_object_object_add(jobj, "label", json_object_new_string(label));
++
++	const char *json = json_object_to_json_string_ext(jobj, JSON_C_TO_STRING_PLAIN);
++
++	char *from_str;
++	if (0 == strcmp(from, "request"))
++		from_str = "alice";
++	else if (0 == strcmp(from, "reply"))
++		from_str = "bob";
++	else
++		return;
++			
++	char command[32768];
++	int len = snprintf(command, 32768, "/usr/bin/wget -O- --header='Content-Type:application/json' --post-data='%s' http://10.65.90.1:8000/submit/%s/%s/%s", json, uuid, from_str, mode_to_string(to));
++	if (len >= 32768)
++		fprintf(stderr, "Command data string truncated! Lost %d characters.\n", len - 32767);
++
++	system(command);
++
++	json_object_put(jobj);
++}
++
++struct alice_data {
++	unsigned int interval;
++	uint8_t *rx_mac;
++	uint8_t *tx_mac;
++	lorcon_t *context;
++	unsigned int mcs;
++	int gi;
++	int bw;
++	unsigned int count;
++	char *label;
++};
++
++void *alice_send(void *arg)
++{
++	struct alice_data *data = (struct alice_data *) arg;
++
++	struct json_object *jobj = json_object_new_object();
++
++	while (keepRunning && (data->count)-- > 0) {
++		// Step 1: Create payload
++		// generate random uuid in uuid field of json
++		{
++			uuid_t binuuid;
++			uuid_generate_random(binuuid);
++			char uuid_str[37];
++			uuid_unparse_upper(binuuid, uuid_str);
++			json_object_object_add(jobj, "uuid", json_object_new_string(uuid_str));
++		}
++
++		// set mode to request
++		{
++			json_object_object_add(jobj, "mode", json_object_new_string("request"));
++		}
++
++		// add label
++		{
++			json_object_object_add(jobj, "label", json_object_new_string(data->label));
++		}
++
++		{
++			// save json to string
++			const char *json = json_object_to_json_string_ext(jobj, JSON_C_TO_STRING_PLAIN);
++
++			// Step 2: Send the payload
++			lcpa_metapack_t *metapack = lcpa_init();
++			lcpf_data(metapack, 3, 0, data->rx_mac, data->tx_mac, data->rx_mac, data->tx_mac, 3, 2);
++
++			lcpf_add_ie(metapack, 0, strlen(json) + 1, json);
++
++			lorcon_packet_t *txpack = lorcon_packet_from_lcpa(data->context, metapack);
++
++			lorcon_packet_set_mcs(txpack, 1, data->mcs, data->gi, data->bw);
++
++			if (lorcon_inject(data->context, txpack) < 0)
++				return EXIT_FAILURE;
++
++			lorcon_packet_free(txpack);
++			lcpa_free(metapack);
++		}
++
++		// Step 4: Sleep for timeout
++		usleep(data->interval * 1000);
++	}
++
++	keepRunning = 0;
++
++	json_object_put(jobj);
++}
++
++int main(int argc, char **argv)
++{
++	int fd;
++	int c;
++	struct csi_t csi;
++	lorcon_driver_t *driver;
++	lorcon_t *context;
++	int tmp[6];
++
++	char *interface = NULL;
++	lorcon_channel_t channel;
++	unsigned int mcs;
++	int bw;
++	int gi;
++	unsigned int interval;
++	uint8_t rx_mac[6];
++	uint8_t *tx_mac;
++	enum MODE mode;
++	struct alice_data data;
++	unsigned int count = 0;
++	char *label = NULL;
++
++	signal(SIGINT, intHandler);
++
++	int argument_count = 0;
++	// TODO: add count for alice
++	while ((c = getopt(argc, argv, "hi:c:m:b:g:d:a:t:n:l:")) != EOF) {
++		switch (c) {
++		case 'i':
++			interface = strdup(optarg);
++			break;
++		case 'c':
++			if (lorcon_parse_ht_channel(optarg, &channel) != 0) {
++				printf("ERROR: Unable to parse channel\n");
++				return EXIT_FAILURE;
++			}
++			break;
++		case 'm':
++			if (sscanf(optarg, "%u", &mcs) != 1) {
++				printf("ERROR: Unable to parse MCS idex\n");
++				return EXIT_FAILURE;
++			}
++			break;
++		case 'b':
++			if (sscanf(optarg, "%u", &bw) != 1) {
++				printf("ERROR: Unable to parse bandwidth \n");
++				return EXIT_FAILURE;
++			}
++			break;
++		case 'g':
++			if (sscanf(optarg, "%u", &gi) != 1) {
++				printf("ERROR: Unable to parse guard interval \n");
++				return EXIT_FAILURE;
++			}
++			break;
++		case 'd':
++			if (sscanf(optarg, "%u", &interval) != 1) {
++				printf("ERROR: Unable to parse interframe interval\n");
++				return EXIT_FAILURE;
++			}
++			break;
++		case 'a':
++			if (sscanf(optarg, "%x:%x:%x:%x:%x:%x", &tmp[0], &tmp[1], &tmp[2], &tmp[3], &tmp[4], &tmp[5]) != 6) {
++				printf("ERROR: Unable to parse MAC address\n");
++				return EXIT_FAILURE;
++			}
++			for (size_t i = 0; i < 6; i++)
++				rx_mac[i] = tmp[i];
++			break;
++		case 't':
++			if (0 == strcmp(optarg, mode_to_string(ALICE)))
++				mode = ALICE;
++			else if (0 == strcmp(optarg, mode_to_string(BOB)))
++				mode = BOB;
++			else if (0 == strcmp(optarg, mode_to_string(EVE)))
++				mode = EVE;
++			else {
++				printf("ERROR: Unable to parse mode: %s\n", optarg);
++				return EXIT_FAILURE;
++			}
++			break;
++		case 'l':
++			label = strdup(optarg);
++			break;
++		case 'n':
++			if (sscanf(optarg, "%u", &count) != 1) {
++				printf("ERROR: Unable to parse count\n");
++				return EXIT_FAILURE;
++			}
++			break;
++		case 'h':
++		default:
++			usage(*argv);
++			return EXIT_FAILURE;
++		};
++
++		argument_count++;
++	}
++
++	if (argument_count != 10) {
++		printf("Did you forget to specify an argument?\n");
++		usage(*argv);
++		return EXIT_FAILURE;
++	}
++
++	fd = open("/dev/csi", O_RDWR);
++
++	if (fd < 0){
++			perror("Failed to open /dev/csi\n");
++			return errno;
++	}
++
++	if ((driver = lorcon_auto_driver(interface)) == NULL) {
++		printf("ERROR: Could not determine the driver for %s\n", interface);
++		return EXIT_FAILURE;
++	} else {
++		printf("[+]\t Driver: %s\n",driver->name);
++	}
++
++	if ((context = lorcon_create(interface, driver)) == NULL) {
++		printf("ERROR: Failed to create context");
++		return EXIT_FAILURE;
++	}
++
++	if (lorcon_open_injmon(context) < 0) {
++		printf("ERROR: Could not create Monitor Mode interface!\n");
++		return EXIT_FAILURE;
++	} else {
++		printf("[+]\t Monitor Mode VAP: %s\n", lorcon_get_vap(context));
++		lorcon_free_driver_list(driver);
++	}
++
++	if (lorcon_get_hwmac(context, &tx_mac) <= 0) {
++		printf("ERROR: Could not get hw mac address\n");
++		return EXIT_FAILURE;
++	}
++
++	printf("[+]\t Rx MAC: %02x:%02x:%02x:%02x:%02x:%02x\n", rx_mac[0], rx_mac[1], rx_mac[2], rx_mac[3], rx_mac[4], rx_mac[5]);
++
++	lorcon_set_complex_channel(context, &channel);
++
++	printf("[+]\t Using channel: %d center %d type %d\n", channel.channel, channel.center_freq_1, channel.type);
++	printf("[+]\t MCS %u %s %s\n", mcs, bw ? "40MHz" : "20MHz", gi ? "short-gi" : "long-gi");
++
++	if (mode == ALICE) {
++		data.interval = interval;
++		data.rx_mac = rx_mac;
++		data.tx_mac = tx_mac;
++		data.context = context;
++		data.mcs = mcs;
++		data.gi = gi;
++		data.bw = bw;
++		data.count = count;
++		data.label = strdup(label);
++
++		pthread_create(&alice_send_tid, NULL, &alice_send, &data);
++	}
++
++	while (keepRunning) {
++		// Wait for a response
++		// 10ms timeout is set in the kernel module
++		ssize_t cnt = read(fd, &csi, sizeof(struct csi_t));
++		if (cnt != sizeof(struct csi_t))
++						continue;
++
++		struct json_object *jobj;
++
++		const char *json = csi.data + 0x22;
++		printf("Payload: %s\n", json);
++		printf("Payload length: %d, CSI length: %d\n", csi.data_length, csi.csi_length);
++		printf("Timestamp: %d, NR: %d, NC: %d, num_tones: %d, rssi: %d, noise: %d, rate: %d\n",
++				csi.timestamp, csi.nr, csi.nc, csi.num_tones, csi.rssi, csi.noise, csi.rate);
++
++		jobj = json_tokener_parse(json);
++		struct json_object *uuid_obj;
++
++		if (!json_object_object_get_ex(jobj, "uuid", &uuid_obj))
++			goto fini;
++
++		const char *uuid_str = json_object_get_string(uuid_obj);
++
++		if (uuid_str == NULL)
++			goto fini;
++
++		// send a reply back to alice
++		struct json_object *mode_obj;
++
++		if (!json_object_object_get_ex(jobj, "mode", &mode_obj))
++			goto fini;
++
++		const char *mode_str = json_object_get_string(mode_obj);
++
++		if (mode_str == NULL)
++			goto fini;
++
++		struct json_object *label_obj;
++
++		if (!json_object_object_get_ex(jobj, "label", &label_obj))
++			goto fini;
++
++		const char *label_str = json_object_get_string(label_obj);
++
++		if (label_str == NULL)
++			goto fini;
++
++		printf("Received UUID: %s, mode: %s, label: %s\n", uuid_str, mode_str, label_str);
++
++		// if we are bob send a reply back to alice.
++		if (mode == BOB) {
++			if (strcmp(mode_str, "request") != 0)
++				goto fini;
++
++			if (!json_object_set_string(mode_obj, "reply"))
++				goto fini;
++
++			{
++				// save json to string
++				const char *json = json_object_to_json_string_ext(jobj, JSON_C_TO_STRING_PLAIN);
++
++				// Step 2: Send response back
++				lcpa_metapack_t *metapack = lcpa_init();
++				lcpf_data(metapack, 3, 0, rx_mac, tx_mac, rx_mac, tx_mac, 3, 2);
++
++				lcpf_add_ie(metapack, 0, strlen(json) + 1, json);
++
++				lorcon_packet_t *txpack = lorcon_packet_from_lcpa(context, metapack);
++
++				lorcon_packet_set_mcs(txpack, 1, mcs, gi, bw);
++
++				if (lorcon_inject(context, txpack) < 0)
++					return EXIT_FAILURE;
++
++				printf("Sent reply\n");
++
++				lorcon_packet_free(txpack);
++				lcpa_free(metapack);
++			}
++
++			// do not move this block above, otherwise the reply back to alice will not be as promt.
++			send_csi_object(mode, &csi, "request", uuid_str, label_str);
++		} else {
++			send_csi_object(mode, &csi, mode_str, uuid_str, label_str);
++		}
++
++fini:
++		json_object_put(jobj);
++	}
++
++	lorcon_close(context);
++	lorcon_free(context);
++
++	close(fd);
++
++	return 0;
++}
+diff --git a/package/utils/lorcon/Makefile b/package/utils/lorcon/Makefile
+new file mode 100644
+index 0000000000..f5e426fe24
+--- /dev/null
++++ b/package/utils/lorcon/Makefile
+@@ -0,0 +1,81 @@
++include $(TOPDIR)/rules.mk
++
++PKG_NAME:=lorcon
++PKG_VERSION:=2017git
++PKG_RELEASE:=1
++
++PKG_SOURCE_PROTO:=git
++PKG_SOURCE_URL:=https://github.com/marenz2569/lorcon.git
++PKG_SOURCE_VERSION:=b774e8d1f4653c7b1ae28309b389a4b4ee24a655
++#PKG_SOURCE_SUBDIR:=$(PKG_NAME)-$(PKG_VERSION)
++PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION)-$(PKG_SOURCE_VERSION).tar.gz
++PKG_FIXUP:=autoreconf
++#PKG_FIXUP:=autoreconf libtool
++
++include $(INCLUDE_DIR)/package.mk
++
++PKG_BUILD_DEPENDS:=libpcap libnl wireless-tools libnfnetlink
++
++define Package/lorcon
++  SECTION:=lib
++  CATEGORY:=Libraries
++  TITLE:=Lorcon (2017)
++  URL:=https://www.kismetwireless.net/
++  DEPENDS:=+libpcap +wireless-tools +libnfnetlink +libnl
++endef
++
++define Package/lorcon/description
++ LORCON Tools
++endef
++
++#define Build/Configure
++#  $(call Build/Configure/Default,--with-linux-headers=$(LINUX_DIR))
++#endef
++
++define Build/Configure
++	(cd $(PKG_BUILD_DIR); mv ../$(PKG_NAME) .; cd $(PKG_NAME); ls -l aclocal.m4; rm aclocal.m4; aclocal; autoconf; autoreconf -ivf; rm -rf config.cache; \
++		$(TARGET_CONFIGURE_OPTS) \
++		CFLAGS="$(strip $(TARGET_CFLAGS))" \
++		CPPFLAGS="-I$(STAGING_DIR)/usr/include -I$(STAGING_DIR)/include" \
++		LDFLAGS="-L$(STAGING_DIR)/usr/lib -L$(STAGING_DIR)/lib" \
++		./configure \
++			--target=$(GNU_TARGET_NAME) \
++			--host=$(GNU_TARGET_NAME) \
++			--build=$(GNU_HOST_NAME) \
++			--prefix=/usr \
++	);
++endef
++
++#user to say 'all install'
++define Build/Compile
++	$(MAKE) -C $(PKG_BUILD_DIR)/ \
++		LD="$(TARGET_CXX)" \
++		DESTDIR="$(PKG_INSTALL_DIR)" \
++		all install
++	$(MAKE) -C $(PKG_BUILD_DIR)/ \
++		LD="$(TARGET_CXX)" \
++		DESTDIR="$(PKG_INSTALL_DIR)" \
++		tools
++	$(CP) -r $(PKG_INSTALL_DIR)/usr/include/lorcon2/* $(PKG_INSTALL_DIR)/usr/include
++	$(RM) -r $(PKG_INSTALL_DIR)/usr/include/lorcon2
++endef
++
++define Package/lorcon/install
++	# Copy the libraries
++	mkdir -p $(STAGING_DIR)/usr/include
++	$(INSTALL_DIR) $(1)/usr/include
++	$(CP)  $(PKG_INSTALL_DIR)/usr/include/* $(STAGING_DIR)/usr/include/
++	$(CP) $(PKG_INSTALL_DIR)/usr/include/* $(1)/usr/include/
++
++	$(INSTALL_DIR) $(1)/usr/lib
++	$(CP) $(PKG_INSTALL_DIR)/usr/lib/liborcon*.so $(STAGING_DIR)/usr/lib/
++	$(CP) $(PKG_INSTALL_DIR)/usr/lib/liborcon*.so $(1)/usr/lib/
++
++	# Copy mcs_sweep2
++	$(INSTALL_DIR) $(1)/usr/bin
++	$(CP) $(PKG_BUILD_DIR)/tools/mcs_sweep2 $(1)/usr/bin/
++#	$(CP) $(PKG_BUILD_DIR)/tools/injector $(1)/usr/bin/
++endef
++
++$(eval $(call BuildPackage,lorcon))
++

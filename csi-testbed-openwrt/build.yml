@@ -1,0 +1,6 @@
+.build:
+  tags:
+    - docker-images
+  script:
+    - docker info
+    - cd src && docker build -f "$DOCKERFILE" .
